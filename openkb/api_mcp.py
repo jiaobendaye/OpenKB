@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import hmac
 import os
-from pathlib import Path
 from typing import Any
 
 from openkb.agent.tools import (
@@ -24,6 +23,7 @@ from openkb.agent.tools import (
     list_wiki_files,
     read_wiki_file,
     read_wiki_image,
+    search_wiki,
 )
 from openkb.api_helpers import _resolve_kb
 
@@ -179,57 +179,14 @@ def create_mcp_server() -> Any:
             max_results: Max matches to return. Default 100.
             context_lines: Lines of context around each match. Default 2.
         """
-        import re
-
-        wiki_root = _wiki_root_for(kb)
-        root = Path(wiki_root).resolve()
-        search_root = root
-        if directory:
-            search_root = (root / directory).resolve()
-            if not search_root.is_relative_to(root):
-                return "Access denied: path escapes wiki root."
-        if not search_root.is_dir():
-            return f"Directory not found: {directory or '/'}"
-
-        flags = re.IGNORECASE if case_insensitive else 0
-        try:
-            regex = re.compile(pattern, flags)
-        except re.error as exc:
-            return f"Invalid regex: {exc}"
-
-        matches: list[dict[str, Any]] = []
-        truncated = False
-        for md_file in sorted(search_root.rglob("*.md")):
-            if truncated:
-                break
-            try:
-                lines = md_file.read_text(encoding="utf-8", errors="replace").splitlines()
-            except OSError:
-                continue
-            rel_path = str(md_file.relative_to(root))
-            for i, line in enumerate(lines):
-                if regex.search(line):
-                    start = max(0, i - context_lines)
-                    end = min(len(lines), i + context_lines + 1)
-                    context: list[str] = []
-                    for j in range(start, end):
-                        marker = ">>" if j == i else "  "
-                        context.append(f"{marker} {j + 1}: {lines[j]}")
-                    matches.append(
-                        {"file": rel_path, "line": i + 1, "snippet": "\n".join(context)}
-                    )
-                    if len(matches) >= max_results:
-                        truncated = True
-                        break
-
-        if not matches:
-            return "No matches found."
-        parts = [f"{len(matches)} match(es):"]
-        for m in matches:
-            parts.append(f"\n{m['file']}:{m['line']}\n{m['snippet']}")
-        if truncated:
-            parts.append(f"\n... (truncated at {max_results} results)")
-        return "\n".join(parts)
+        return search_wiki(
+            pattern,
+            _wiki_root_for(kb),
+            directory=directory,
+            case_insensitive=case_insensitive,
+            max_results=max_results,
+            context_lines=context_lines,
+        )
 
     _mcp_instance = mcp
     return mcp
