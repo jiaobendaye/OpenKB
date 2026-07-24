@@ -6,7 +6,7 @@ import argparse
 import asyncio
 import logging
 import os
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any
 
 import litellm
@@ -142,6 +142,14 @@ def create_app() -> FastAPI:
             kb_mutation_locks[kb] = lock
         return lock
 
+    # Optional MCP server (requires mcp). Created before lifespan for session_manager.run().
+    mcp_server = None
+    try:
+        from openkb.api_mcp import create_mcp_server
+        mcp_server = create_mcp_server()
+    except ImportError:
+        pass
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         # Auth is opt-in (see require_bearer_token). Warn once at server startup
@@ -155,10 +163,13 @@ def create_app() -> FastAPI:
                 "This is fine for local use; set OPENKB_API_TOKEN to require a "
                 "bearer token before exposing the server on a reachable interface."
             )
-        try:
-            yield
-        finally:
-            registry.stop_all()
+        async with AsyncExitStack() as stack:
+            if mcp_server is not None:
+                await stack.enter_async_context(mcp_server.session_manager.run())
+            try:
+                yield
+            finally:
+                registry.stop_all()
 
     app = FastAPI(title="OpenKB API", lifespan=lifespan)
 
@@ -755,6 +766,11 @@ def create_app() -> FastAPI:
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Not found",
         )
+
+    # Mount MCP at /mcp before web UI's catch-all "/" mount.
+    if mcp_server is not None:
+        from openkb.api_mcp import mount_mcp_onto
+        mount_mcp_onto(app, mcp_server)
 
     _mount_web_ui(app)
 
