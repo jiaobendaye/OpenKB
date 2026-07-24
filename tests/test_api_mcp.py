@@ -114,14 +114,16 @@ def _mcp_call(
     return _parse_sse(resp.text)
 
 
-def test_mcp_server_registers_5_tools(monkeypatch):
-    """The FastMCP server exposes exactly the 5 wiki tools."""
+def test_mcp_server_registers_6_tools(monkeypatch):
+    """The FastMCP server exposes exactly the 6 wiki tools."""
     import openkb.api_mcp
 
     openkb.api_mcp._mcp_instance = None
     mcp = openkb.api_mcp.create_mcp_server()
     tools = sorted(mcp._tool_manager._tools.keys())
-    assert tools == ["get_image", "get_page_content", "list_files", "list_kbs", "read_file"]
+    assert tools == [
+        "get_image", "get_page_content", "grep", "list_files", "list_kbs", "read_file",
+    ]
 
 
 def test_mcp_rejects_missing_token(monkeypatch, kb_dir):
@@ -175,9 +177,9 @@ def test_mcp_tools_list(monkeypatch, kb_dir):
         sid = _mcp_session(client, headers)
         result = _mcp_call(client, sid, headers, method="tools/list")
     tools = result["result"]["tools"]
-    assert len(tools) == 5
+    assert len(tools) == 6
     names = sorted(t["name"] for t in tools)
-    assert names == ["get_image", "get_page_content", "list_files", "list_kbs", "read_file"]
+    assert names == ["get_image", "get_page_content", "grep", "list_files", "list_kbs", "read_file"]
     for t in tools:
         assert t.get("description"), f"tool {t['name']} has no description"
 
@@ -187,7 +189,8 @@ def test_mcp_list_kbs(monkeypatch, kb_dir):
     monkeypatch.setattr(
         "openkb.api_kbs._list_knowledge_bases",
         lambda: {"root": str(kb_dir), "knowledge_bases": [
-            {"name": "test-kb", "path": str(kb_dir), "document_count": 3, "last_compile": None, "has_raw": True}
+            {"name": "test-kb", "path": str(kb_dir),
+             "document_count": 3, "last_compile": None, "has_raw": True}
         ]},
     )
     headers = {**_MCP_HEADERS, **_auth()}
@@ -283,6 +286,84 @@ def test_mcp_list_files_empty_dir(monkeypatch, kb_dir):
         )
     text = result["result"]["content"][0]["text"]
     assert "No files" in text
+
+
+def test_mcp_grep(monkeypatch, kb_dir):
+    """grep finds matching lines across wiki .md files with context."""
+    (kb_dir / "wiki" / "concepts" / "alpha.md").write_text(
+        "# Alpha\n\nThe attention mechanism is key.\n", encoding="utf-8"
+    )
+    (kb_dir / "wiki" / "concepts" / "beta.md").write_text(
+        "# Beta\n\nNo relevant content here.\n", encoding="utf-8"
+    )
+    kb = _use_named_kb(monkeypatch, kb_dir)
+    headers = {**_MCP_HEADERS, **_auth()}
+    with _client(monkeypatch) as client:
+        sid = _mcp_session(client, headers)
+        result = _mcp_call(
+            client, sid, headers,
+            method="tools/call",
+            params={"name": "grep", "arguments": {"pattern": "attention", "kb": kb}},
+        )
+    text = result["result"]["content"][0]["text"]
+    assert "alpha.md" in text
+    assert "attention mechanism" in text
+    assert "beta.md" not in text
+
+
+def test_mcp_grep_no_matches(monkeypatch, kb_dir):
+    """grep with no matches returns 'No matches found.'"""
+    (kb_dir / "wiki" / "concepts" / "x.md").write_text("# X\n", encoding="utf-8")
+    kb = _use_named_kb(monkeypatch, kb_dir)
+    headers = {**_MCP_HEADERS, **_auth()}
+    with _client(monkeypatch) as client:
+        sid = _mcp_session(client, headers)
+        result = _mcp_call(
+            client, sid, headers,
+            method="tools/call",
+            params={"name": "grep", "arguments": {"pattern": "nonexistent_term", "kb": kb}},
+        )
+    text = result["result"]["content"][0]["text"]
+    assert "No matches" in text
+
+
+def test_mcp_grep_scoped_directory(monkeypatch, kb_dir):
+    """grep with directory parameter limits search scope."""
+    (kb_dir / "wiki" / "concepts" / "a.md").write_text("found it\n", encoding="utf-8")
+    (kb_dir / "wiki" / "summaries" / "b.md").write_text("found it\n", encoding="utf-8")
+    kb = _use_named_kb(monkeypatch, kb_dir)
+    headers = {**_MCP_HEADERS, **_auth()}
+    with _client(monkeypatch) as client:
+        sid = _mcp_session(client, headers)
+        result = _mcp_call(
+            client, sid, headers,
+            method="tools/call",
+            params={
+                "name": "grep",
+                "arguments": {"pattern": "found", "kb": kb, "directory": "concepts"},
+            },
+        )
+    text = result["result"]["content"][0]["text"]
+    assert "concepts/a.md" in text
+    assert "summaries/b.md" not in text
+
+
+def test_mcp_grep_path_traversal(monkeypatch, kb_dir):
+    """grep rejects directory paths that escape the wiki root."""
+    kb = _use_named_kb(monkeypatch, kb_dir)
+    headers = {**_MCP_HEADERS, **_auth()}
+    with _client(monkeypatch) as client:
+        sid = _mcp_session(client, headers)
+        result = _mcp_call(
+            client, sid, headers,
+            method="tools/call",
+            params={
+                "name": "grep",
+                "arguments": {"pattern": "x", "kb": kb, "directory": "../../../etc"},
+            },
+        )
+    text = result["result"]["content"][0]["text"]
+    assert "denied" in text.lower() or "escapes" in text.lower()
 
 
 def test_mcp_get_page_content(monkeypatch, kb_dir):
