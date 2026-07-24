@@ -38,6 +38,81 @@ def list_wiki_files(directory: str, wiki_root: str) -> str:
     return "\n".join(md_files)
 
 
+def search_wiki(
+    pattern: str,
+    wiki_root: str,
+    directory: str = "",
+    case_insensitive: bool = True,
+    max_results: int = 100,
+    context_lines: int = 2,
+) -> str:
+    """Search wiki .md files for a regex pattern.
+
+    Args:
+        pattern: Regex pattern to search for.
+        wiki_root: Absolute path to the wiki root directory.
+        directory: Optional subdirectory to limit search scope
+            (e.g. ``"concepts"``). Empty = search all.
+        case_insensitive: If True (default), match case-insensitively.
+        max_results: Maximum number of matches to return.
+        context_lines: Number of context lines around each match.
+
+    Returns:
+        Formatted search results with file path, line number, and
+        context, or ``"No matches found."`` if nothing matches.
+    """
+    import re
+
+    root = Path(wiki_root).resolve()
+    search_root = root
+    if directory:
+        search_root = (root / directory).resolve()
+        if not search_root.is_relative_to(root):
+            return "Access denied: path escapes wiki root."
+    if not search_root.is_dir():
+        return f"Directory not found: {directory or '/'}"
+
+    flags = re.IGNORECASE if case_insensitive else 0
+    try:
+        regex = re.compile(pattern, flags)
+    except re.error as exc:
+        return f"Invalid regex: {exc}"
+
+    matches: list[dict[str, object]] = []
+    truncated = False
+    for md_file in sorted(search_root.rglob("*.md")):
+        if truncated:
+            break
+        try:
+            lines = md_file.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        rel_path = str(md_file.relative_to(root))
+        for i, line in enumerate(lines):
+            if regex.search(line):
+                start = max(0, i - context_lines)
+                end = min(len(lines), i + context_lines + 1)
+                context: list[str] = []
+                for j in range(start, end):
+                    marker = ">>" if j == i else "  "
+                    context.append(f"{marker} {j + 1}: {lines[j]}")
+                matches.append(
+                    {"file": rel_path, "line": i + 1, "snippet": "\n".join(context)}
+                )
+                if len(matches) >= max_results:
+                    truncated = True
+                    break
+
+    if not matches:
+        return "No matches found."
+    parts = [f"{len(matches)} match(es):"]
+    for m in matches:
+        parts.append(f"\n{m['file']}:{m['line']}\n{m['snippet']}")
+    if truncated:
+        parts.append(f"\n... (truncated at {max_results} results)")
+    return "\n".join(parts)
+
+
 def read_wiki_file(path: str, wiki_root: str) -> str:
     """Read a Markdown file from the wiki.
 

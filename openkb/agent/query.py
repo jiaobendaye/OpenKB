@@ -12,6 +12,7 @@ from openkb.agent.tools import (
     get_wiki_page_content,
     read_wiki_file,
     read_wiki_image,
+    search_wiki,
     write_kb_file,
 )
 from openkb.config import LlmCredentialBundle, resolve_model_settings
@@ -27,9 +28,11 @@ You are OpenKB, a knowledge-base Q&A agent. You answer questions by searching th
 ## Search strategy
 1. Read index.md to see all documents and concepts with brief summaries.
    Each document is marked (short) or (pageindex) to indicate its type.
+   For "which pages mention X" questions, use grep(pattern) to search
+   all .md files at once instead of reading each page individually.
 2. Read relevant summary pages (summaries/) for document overviews.
    Summaries may omit details — if you need more, follow the summary's
-   `full_text` frontmatter field to the source (see step 4).
+   `full_text` frontmatter field to the source (see step 5).
 3. Read concept pages (concepts/) for cross-document synthesis.
 4. For "who/what is X" questions about a specific named person, organization,
    place, or product, read the matching page in entities/ first.
@@ -101,6 +104,37 @@ def build_query_agent(
             return ToolOutputImage(image_url=result["image_url"])
         return ToolOutputText(text=result["text"])
 
+    @function_tool
+    def grep(
+        pattern: str,
+        directory: str = "",
+        case_insensitive: bool = True,
+        max_results: int = 100,
+        context_lines: int = 2,
+    ) -> str:
+        """Search wiki content with a regex pattern.
+
+        Returns matching lines with surrounding context across all
+        .md files. Use to find which pages mention a topic before
+        reading them in full.
+
+        Args:
+            pattern: Regex pattern (e.g. 'attention mechanism').
+            directory: Optional subdirectory to limit scope
+                (e.g. 'concepts'). Empty = search all.
+            case_insensitive: Default true.
+            max_results: Max matches. Default 100.
+            context_lines: Context lines around each match. Default 2.
+        """
+        return search_wiki(
+            pattern,
+            wiki_root,
+            directory=directory,
+            case_insensitive=case_insensitive,
+            max_results=max_results,
+            context_lines=context_lines,
+        )
+
     from agents.model_settings import ModelSettings
 
     if bundle is not None:
@@ -117,7 +151,7 @@ def build_query_agent(
     return Agent(
         name="wiki-query",
         instructions=instructions,
-        tools=[read_file, get_page_content, get_image],
+        tools=[read_file, get_page_content, get_image, grep],
         model=f"litellm/{model}",
         model_settings=ModelSettings(**model_settings),
     )
