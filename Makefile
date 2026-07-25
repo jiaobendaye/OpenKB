@@ -14,15 +14,15 @@ help: ## Show available targets
 # ── Backend ──────────────────────────────────────────────────────────
 
 install: ## Install backend (dev + web extras) into .venv
-	$(UV) venv $(VENV) --python 3.12
-	$(VENV)/bin/pip install -e ".[dev,web]"
+	@if [ ! -d "$(VENV)" ]; then $(UV) venv $(VENV) --python 3.12; fi
+	$(UV) pip install -e ".[dev,web]"
 
 install-global: ## Install as global CLI tool (uv tool install)
 	$(UV) tool install -e ".[web,dev]" --force
 
 install-prod: ## Install production deps only (web extra)
-	$(UV) venv $(VENV) --python 3.12
-	$(VENV)/bin/pip install -e ".[web]"
+	@if [ ! -d "$(VENV)" ]; then $(UV) venv $(VENV) --python 3.12; fi
+	$(UV) pip install -e ".[web]"
 
 test: ## Run pytest
 	$(VENV)/bin/python -m pytest $(ARGS)
