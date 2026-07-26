@@ -633,3 +633,60 @@ def test_recompile_refuses_when_read_only(tmp_path):
 
     assert result.exit_code != 0, result.output
     assert "read-only" in result.output.lower()
+
+
+# --- `openkb mcp` stdio subcommand ------------------------------------------
+
+def test_mcp_missing_kb_exits_nonzero(tmp_path):
+    """`openkb mcp` must surface a clear "no KB found" error and exit non-zero
+    — same discipline as add/remove/recompile, since the stdio server also
+    needs a KB to resolve the tool functions' `kb` parameter against."""
+    from openkb.cli import cli
+
+    runner = CliRunner()
+    with (
+        patch("openkb.cli._find_kb_dir", return_value=None),
+        patch("openkb.api_mcp.create_mcp_server") as mock_create,
+    ):
+        result = runner.invoke(cli, ["mcp"])
+
+    assert result.exit_code != 0, result.output
+    assert "No knowledge base found" in result.output
+    mock_create.assert_not_called()
+
+
+def test_mcp_runs_stdio_server_when_kb_exists(tmp_path, monkeypatch):
+    """When a KB is found, `openkb mcp` builds the MCP server (which already
+    exposes 6 read-only wiki tools) and runs it in stdio transport — the
+    transport local MCP clients (Claude Desktop, Cursor, …) speak."""
+    from openkb.cli import cli
+
+    kb_dir = _make_read_only_kb(tmp_path)  # skeleton KB; structure unused
+
+    run_calls: list[str] = []
+
+    class _FakeServer:
+        def run(self, transport):
+            run_calls.append(transport)
+
+    def _fake_create():
+        return _FakeServer()
+
+    with (
+        patch("openkb.cli._find_kb_dir", return_value=kb_dir),
+        patch("openkb.api_mcp.create_mcp_server", _fake_create),
+    ):
+        result = CliRunner().invoke(cli, ["mcp"])
+
+    assert result.exit_code == 0, result.output
+    assert run_calls == ["stdio"]
+
+
+def test_mcp_help_lists_subcommand():
+    """Smoke-check `openkb mcp --help` parses without error — guards against
+    a future edit breaking the command's Click signature."""
+    from openkb.cli import cli
+
+    result = CliRunner().invoke(cli, ["mcp", "--help"])
+    assert result.exit_code == 0
+    assert "stdio" in result.output.lower() or "mcp" in result.output.lower()
