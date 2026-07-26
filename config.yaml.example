@@ -27,6 +27,13 @@ pageindex_threshold: 20          # PDF pages threshold for PageIndex
 #   - dataset
 #   - model
 
+# Optional: lock this KB against mutating operations. When true, the CLI's
+# `add` / `remove` / `recompile` and the matching HTTP endpoints
+# (`POST /api/v1/{add,remove,recompile}`) refuse to run (CLI exits non-zero;
+# HTTP returns 403). Wiki page edit/delete is unaffected. Set false / omit
+# to allow normal use. Accepts `true`/`false` and `1`/`0`/`yes`/`no`/`on`/`off`.
+# read_only: false
+
 # Optional: LLM / LiteLLM tuning. Keys are forwarded to LiteLLM; `timeout` and
 # `extra_headers` apply per request, the rest are set as litellm.<key>.
 # litellm:

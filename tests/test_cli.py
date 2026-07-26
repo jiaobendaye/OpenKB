@@ -574,3 +574,62 @@ class TestSetupLlmKey:
 
         _setup_llm_key(tmp_path)
         assert "No LLM API key found" not in capsys.readouterr().out
+
+
+# --- read_only guards on the mutating CLI commands ---------------------------
+
+def _make_read_only_kb(tmp_path):
+    """Minimal KB skeleton with read_only: true in its config.yaml."""
+    (tmp_path / "raw").mkdir()
+    (tmp_path / "wiki" / "sources").mkdir(parents=True)
+    (tmp_path / "wiki" / "summaries").mkdir(parents=True)
+    (tmp_path / "wiki" / "concepts").mkdir(parents=True)
+    (tmp_path / "wiki" / "explorations").mkdir(parents=True)
+    (tmp_path / "wiki" / "reports").mkdir(parents=True)
+    (tmp_path / ".openkb").mkdir()
+    (tmp_path / ".openkb" / "config.yaml").write_text(
+        "read_only: true\n", encoding="utf-8"
+    )
+    (tmp_path / ".openkb" / "hashes.json").write_text("{}", encoding="utf-8")
+    return tmp_path
+
+
+def test_add_refuses_when_read_only(tmp_path):
+    from openkb.cli import cli
+
+    kb_dir = _make_read_only_kb(tmp_path)
+    doc = tmp_path / "x.pdf"
+    doc.write_bytes(b"%PDF-1.4\n")
+
+    runner = CliRunner()
+    with patch("openkb.cli._find_kb_dir", return_value=kb_dir):
+        result = runner.invoke(cli, ["add", str(doc)])
+
+    assert result.exit_code != 0, result.output
+    assert "read-only" in result.output.lower()
+
+
+def test_remove_refuses_when_read_only(tmp_path):
+    from openkb.cli import cli
+
+    kb_dir = _make_read_only_kb(tmp_path)
+
+    runner = CliRunner()
+    with patch("openkb.cli._find_kb_dir", return_value=kb_dir):
+        result = runner.invoke(cli, ["remove", "anything.pdf"])
+
+    assert result.exit_code != 0, result.output
+    assert "read-only" in result.output.lower()
+
+
+def test_recompile_refuses_when_read_only(tmp_path):
+    from openkb.cli import cli
+
+    kb_dir = _make_read_only_kb(tmp_path)
+
+    runner = CliRunner()
+    with patch("openkb.cli._find_kb_dir", return_value=kb_dir):
+        result = runner.invoke(cli, ["recompile", "x.pdf"])
+
+    assert result.exit_code != 0, result.output
+    assert "read-only" in result.output.lower()

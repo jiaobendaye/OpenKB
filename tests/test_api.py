@@ -3414,3 +3414,134 @@ def test_delete_kb_filenotfound_is_idempotent(monkeypatch, tmp_path):
     )
     assert r.status_code == 200
     assert r.json()["deleted"] is True
+
+
+# --- read_only guard on mutating endpoints -----------------------------------
+# The KB-level config.yaml `read_only: true` toggle is enforced by three
+# endpoints: add, remove, recompile. Wiki-page edit/delete intentionally stay
+# open (they are compiled-artifact edits and out of scope for this toggle).
+
+import yaml as _yaml  # noqa: E402
+
+
+def _mark_read_only(kb_dir) -> None:
+    """Set read_only: true in the KB's config.yaml. A fresh write avoids
+    clobbering the conftest fixture's other keys."""
+    cfg = {}
+    existing = kb_dir / ".openkb" / "config.yaml"
+    if existing.exists():
+        cfg = _yaml.safe_load(existing.read_text(encoding="utf-8")) or {}
+    cfg["read_only"] = True
+    existing.write_text(_yaml.safe_dump(cfg), encoding="utf-8")
+
+
+def test_add_endpoint_403_when_read_only(monkeypatch, kb_dir):
+    _mark_read_only(kb_dir)
+    client = _client(monkeypatch)
+    kb = _use_named_kb(monkeypatch, kb_dir)
+
+    # If the guard is missing, the endpoint would try to reserve+write uploads
+    # via `_reserve_add_uploads`. The patch catches it; we assert it is NEVER
+    # reached AND we get a 403 with a useful detail.
+    called = {"n": 0}
+
+    def _fake_reserve(*args, **kwargs):
+        called["n"] += 1
+        return []
+
+    monkeypatch.setattr("openkb.api._reserve_add_uploads", _fake_reserve)
+
+    response = client.post(
+        "/api/v1/add",
+        data={"kb": kb},
+        files=[("files", ("paper.pdf", b"%PDF-1.4\n", "application/pdf"))],
+        headers=_auth(),
+    )
+
+    assert response.status_code == 403, response.text
+    assert "read-only" in response.json()["detail"].lower()
+    assert called["n"] == 0  # guard fired before reservation
+
+
+def test_remove_endpoint_403_when_read_only(monkeypatch, kb_dir):
+    _mark_read_only(kb_dir)
+    client = _client(monkeypatch)
+    kb = _use_named_kb(monkeypatch, kb_dir)
+
+    called = {"n": 0}
+
+    def _fake_remove(*args, **kwargs):
+        called["n"] += 1
+        return {"status": "removed", "actions": [], "lint_files_changed": 0}
+
+    monkeypatch.setattr("openkb.api.run_remove_for_api", _fake_remove)
+
+    response = client.post(
+        "/api/v1/remove",
+        json={"kb": kb, "identifier": "paper.pdf"},
+        headers=_auth(),
+    )
+
+    assert response.status_code == 403, response.text
+    assert "read-only" in response.json()["detail"].lower()
+    assert called["n"] == 0
+
+
+def test_recompile_endpoint_403_when_read_only(monkeypatch, kb_dir):
+    _mark_read_only(kb_dir)
+    client = _client(monkeypatch)
+    kb = _use_named_kb(monkeypatch, kb_dir)
+
+    called = {"n": 0}
+
+    def _fake_recompile(*args, **kwargs):
+        called["n"] += 1
+        return {"status": "done", "recompiled": 1}
+
+    monkeypatch.setattr("openkb.api.iter_recompile", _fake_recompile)
+
+    response = client.post(
+        "/api/v1/recompile",
+        json={"kb": kb, "doc_name": "paper.pdf"},
+        headers=_auth(),
+    )
+
+    assert response.status_code == 403, response.text
+    assert "read-only" in response.json()["detail"].lower()
+    assert called["n"] == 0
+
+
+def test_add_endpoint_still_works_when_read_only_false(monkeypatch, kb_dir):
+    # Sanity check: when read_only is absent (the default), add still proceeds.
+    # This guards against accidentally always returning 403.
+    client = _client(monkeypatch)
+    kb = _use_named_kb(monkeypatch, kb_dir)
+
+    # Match what the real add endpoint calls when stream=false.
+    def _fake_reserve(kb_dir, files, **kwargs):
+        return [(kb_dir / "raw" / "paper.pdf", "fakehash", 1)]
+
+    async def _fake_write(reserved, files, **kwargs):
+        return reserved
+
+    async def _fake_run(kb, kb_dir, uploads, **kw):
+        return {
+            "kb": kb,
+            "added_count": len(uploads),
+            "skipped_count": 0,
+            "failed_count": 0,
+            "files": [],
+        }
+
+    monkeypatch.setattr("openkb.api._reserve_add_uploads", _fake_reserve)
+    monkeypatch.setattr("openkb.api._write_add_uploads", _fake_write)
+    monkeypatch.setattr("openkb.api._run_add_uploads", _fake_run)
+
+    response = client.post(
+        "/api/v1/add",
+        data={"kb": kb, "stream": "false"},
+        files=[("files", ("paper.pdf", b"%PDF-1.4\n", "application/pdf"))],
+        headers=_auth(),
+    )
+
+    assert response.status_code == 200, response.text

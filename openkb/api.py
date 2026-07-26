@@ -111,6 +111,7 @@ from openkb.config import (
     validate_kb_name,
 )
 from openkb.log import append_log
+from openkb.read_only import ReadOnlyError, enforce_not_read_only
 from openkb.watch_service import WatchRegistry
 
 logger = logging.getLogger(__name__)
@@ -259,6 +260,12 @@ def create_app() -> FastAPI:
         _: None = Depends(require_bearer_token),
     ) -> Any:
         resolved_kb_dir = _resolve_kb(kb)
+        try:
+            enforce_not_read_only(resolved_kb_dir, "add")
+        except ReadOnlyError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)
+            ) from exc
         bundle = resolve_credential_bundle(resolved_kb_dir)
         if not files:
             raise HTTPException(
@@ -473,6 +480,12 @@ def create_app() -> FastAPI:
         _: None = Depends(require_bearer_token),
     ) -> Any:
         kb_dir = _resolve_kb(request.kb)
+        try:
+            enforce_not_read_only(kb_dir, "remove")
+        except ReadOnlyError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)
+            ) from exc
         if request.stream:
             return StreamingResponse(
                 _stream_remove(request, kb_dir),
@@ -508,6 +521,12 @@ def create_app() -> FastAPI:
         _: None = Depends(require_bearer_token),
     ) -> Any:
         kb_dir = _resolve_kb(request.kb)
+        try:
+            enforce_not_read_only(kb_dir, "recompile")
+        except ReadOnlyError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)
+            ) from exc
         bundle = resolve_credential_bundle(kb_dir)
         if request.stream:
             lock = _kb_mutation_lock(request.kb)
