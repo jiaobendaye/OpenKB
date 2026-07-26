@@ -51,6 +51,13 @@ dependencies = [
     "prompt_toolkit==3.0.52",
     "rich==15.0.0",
     "portalocker==3.2.0",
+    # MCP powers BOTH the HTTP `/mcp` endpoint (served by the [web] extra's
+    # FastAPI app) AND the standalone `openkb mcp` stdio CLI command. Because
+    # the CLI ships in core (every install) and `openkb mcp` is a first-class
+    # subcommand — not gated behind any extra — the package is a core dep.
+    # The [web] extra still installs `mcp` transitively, so removing it from
+    # that list is safe.
+    "mcp==1.28.1",
 ]
 
 [project.urls]
@@ -78,8 +85,9 @@ dev = [
 ]
 # The Knowledge Workbench Web UI is served by this FastAPI server. `web` is the
 # canonical extra; `api` is a backwards-compatible alias so an existing
-# `pip install "openkb[api]"` keeps working.
-web = ["fastapi", "uvicorn", "python-multipart", "mcp==1.28.1"]
+# `pip install "openkb[api]"` keeps working. `mcp` itself is a core dep
+# (powers `openkb mcp` stdio + HTTP MCP transport), not part of this extra.
+web = ["fastapi", "uvicorn", "python-multipart"]
 api = ["openkb[web]"]
 
 [tool.hatch.version]

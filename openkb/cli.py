@@ -2914,6 +2914,46 @@ def feedback(ctx, message, feedback_type):
 
 
 # ---------------------------------------------------------------------------
+# `openkb mcp` — stdio MCP server (for local MCP clients like Claude Desktop)
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@click.pass_context
+def mcp(ctx):
+    """Run the OpenKB MCP server over stdio.
+
+    Speaks the Model Context Protocol on stdin/stdout so local MCP clients
+    (Claude Desktop, Cursor, Continue, …) can connect to this KB without
+    needing the ``openkb serve`` HTTP server. Exposes the same 6 read-only
+    wiki tools as the HTTP MCP at ``/mcp`` (list_kbs, list_files, read_file,
+    get_page_content, get_image, grep), all addressed by ``kb`` name.
+
+    Discovery follows the same rules as ``openkb add``/``remove``/``recompile``
+    — set the cwd inside a KB directory or pass ``OPENKB_KB_ROOT``. The KB
+    is required because every tool routes by KB name via
+    :func:`openkb.api_helpers._resolve_kb`.
+
+    The ``mcp`` package is a CORE dependency (not gated behind the
+    optional ``[web]`` extra) precisely so this command works on every
+    install — it ships alongside the CLI itself. The import is local to
+    this function to avoid a circular import with :mod:`openkb.api_mcp`
+    → :mod:`openkb.api_helpers` → :mod:`openkb.cli`; the package itself
+    is still always available (it's a core dep).
+    """
+    from openkb.api_mcp import create_mcp_server  # local: avoid cli ↔ api_mcp cycle
+
+    kb_dir = _find_kb_dir(ctx.obj.get("kb_dir_override"))
+    if kb_dir is None:
+        click.echo("No knowledge base found. Run `openkb init` first.")
+        ctx.exit(1)
+        return
+
+    mcp_server = create_mcp_server()
+    mcp_server.run(transport="stdio")
+
+
+# ---------------------------------------------------------------------------
 # `openkb skill ...` — skill factory (v0.1)
 # ---------------------------------------------------------------------------
 
