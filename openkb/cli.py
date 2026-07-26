@@ -2934,17 +2934,20 @@ def mcp(ctx):
     is required because every tool routes by KB name via
     :func:`openkb.api_helpers._resolve_kb`.
 
-    The MCP server is built lazily so the optional ``[web]`` extra (which
-    provides the ``mcp`` package) is only needed when this command runs;
-    ``openkb --help`` and every other subcommand still work without it.
+    The ``mcp`` package is a CORE dependency (not gated behind the
+    optional ``[web]`` extra) precisely so this command works on every
+    install — it ships alongside the CLI itself. The import is local to
+    this function to avoid a circular import with :mod:`openkb.api_mcp`
+    → :mod:`openkb.api_helpers` → :mod:`openkb.cli`; the package itself
+    is still always available (it's a core dep).
     """
+    from openkb.api_mcp import create_mcp_server  # local: avoid cli ↔ api_mcp cycle
+
     kb_dir = _find_kb_dir(ctx.obj.get("kb_dir_override"))
     if kb_dir is None:
         click.echo("No knowledge base found. Run `openkb init` first.")
         ctx.exit(1)
         return
-
-    from openkb.api_mcp import create_mcp_server
 
     mcp_server = create_mcp_server()
     mcp_server.run(transport="stdio")
