@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
-import { useNavigate, useParams } from 'react-router'
+import { useNavigate, useParams, useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import * as Dialog from '@radix-ui/react-dialog'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
@@ -15,6 +15,11 @@ import KbOverviewCards, { type Section } from '@/components/KbOverviewCards'
 import KbSettingsSheet from '@/components/KbSettingsSheet'
 import { useAnimatedSwitch } from '@/hooks/useAnimatedSwitch'
 import { cn } from '@/lib/utils'
+
+/** Every valid nav-card section — used to validate the `?section=` URL param
+ *  so a hand-edited or stale link falls back to the wiki home instead of an
+ *  unknown tab. */
+const SECTIONS: Section[] = ['index', 'concepts', 'entities', 'summaries', 'reports', 'documents']
 
 /** True when `line` looks like a line of a YAML frontmatter block: a blank line,
  *  a `#` comment, a `- ` list item, an indented continuation, or a `key: value`
@@ -109,11 +114,22 @@ export default function KbDetail() {
 
   const [inv, setInv] = useState<KbInventory | null>(null)
   const [invError, setInvError] = useState<string | null>(null)
-  const [selectedPath, setSelectedPath] = useState<string | null>(null)
 
-  // Nav-card selection (Sub-project G): the six cards ARE the tab bar. The
-  // active card drives which below-area layout renders (Task 13).
-  const [section, setSection] = useState<Section>('index')
+  // In-page navigation (active section + open wiki page) lives in the URL query
+  // string, so every wikilink / page-list / section-card click becomes a browser
+  // history entry that Back/Forward can traverse, and a reloaded or shared URL
+  // restores the same view. Reads derive from the params here; writes go through
+  // `navTo` (below), which is built on the referentially stable `navigate`.
+  const [searchParams] = useSearchParams()
+  const rawSection = searchParams.get('section')
+  const section: Section = SECTIONS.includes(rawSection as Section) ? (rawSection as Section) : 'index'
+  const selectedPath = searchParams.get('page')
+
+  // Whether the entry URL already targeted a page (reload / deep link / Back to
+  // this KB). Captured once at mount so the inventory load only injects the
+  // default `index.md` when the user arrived with no target.
+  const hadInitialTarget = useRef(searchParams.has('section') || searchParams.has('page'))
+
   const [settingsOpen, setSettingsOpen] = useState(false)
   const reduce = useReducedMotion()
   // Frequency-gated enter spring (Apple §3): rapid card clicking renders the
@@ -140,7 +156,22 @@ export default function KbDetail() {
   useEffect(() => () => uploadAbortRef.current?.abort(), [])
 
   const selected = useMemo(() => parseSelected(selectedPath), [selectedPath])
-  const openPath = useCallback((path: string) => setSelectedPath(path), [])
+
+  /** Write the active section + open page into the URL query string as a new
+   *  history entry (or replace the current one). Built on `navigate`, which is
+   *  referentially stable, so every caller below stays stable too. A partial
+   *  `{ search }` navigation keeps the current `/kb/:id` pathname. */
+  const navTo = useCallback(
+    (next: Section, page: string | null, opts?: { replace?: boolean }) => {
+      const p = new URLSearchParams()
+      p.set('section', next)
+      if (page) p.set('page', page)
+      navigate({ search: `?${p.toString()}` }, { replace: opts?.replace })
+    },
+    [navigate],
+  )
+  /** Open a page while keeping the current section (page list + wikilinks). */
+  const openPath = useCallback((path: string) => navTo(section, path), [navTo, section])
 
   /** Navigate a `[[type/name]]` wikilink: open its exact page, and if the
    *  type matches a section card (concepts/entities/summaries/reports),
@@ -151,26 +182,28 @@ export default function KbDetail() {
     (target: string) => {
       const slash = target.indexOf('/')
       const type = slash < 0 ? '' : target.slice(0, slash)
-      if (type === 'concepts' || type === 'entities' || type === 'summaries' || type === 'reports') {
-        setSection(type)
-      }
-      openPath(target)
+      const next: Section =
+        type === 'concepts' || type === 'entities' || type === 'summaries' || type === 'reports'
+          ? type
+          : section
+      navTo(next, target)
     },
-    [openPath],
+    [navTo, section],
   )
 
-  // Load the inventory, then auto-select the first page. State is only ever
-  // set inside the async callbacks (never synchronously in the effect body).
-  // The component is remounted per KB via `key` in App, so no reset is needed.
+  // Load the inventory. When the user arrived with no target in the URL, land on
+  // the wiki home (index.md) via `replace` so Back from the home returns to /kb
+  // rather than a param-less dead entry; a deep-linked / reloaded URL keeps its
+  // own section+page. State is only ever set inside the async callbacks. The
+  // component is remounted per KB via `key` in App, so no reset is needed —
+  // `navTo` is stable, so this effect still runs once per KB mount.
   useEffect(() => {
     let cancelled = false
     getKbInventory(id)
       .then((r) => {
         if (cancelled) return
         setInv(r)
-        // Land on the wiki home (index.md) like a real wiki, not the first concept.
-        setSection('index')
-        setSelectedPath('index.md')
+        if (!hadInitialTarget.current) navTo('index', 'index.md', { replace: true })
       })
       .catch((e) => {
         if (!cancelled) setInvError(errMsg(e))
@@ -178,7 +211,7 @@ export default function KbDetail() {
     return () => {
       cancelled = true
     }
-  }, [id])
+  }, [id, navTo])
 
   // Fetch the selected page's Markdown from the real endpoint.
   useEffect(() => {
@@ -214,9 +247,11 @@ export default function KbDetail() {
    *  inventory — backlink pages changed on disk too (their [[links]] were
    *  demoted to plain text). */
   const onPageDeleted = useCallback(() => {
-    setSelectedPath(null)
+    // Drop the page param (keep the section) via replace so the just-deleted
+    // page can't be reached again with Forward.
+    navTo(section, null, { replace: true })
     void refreshInventory()
-  }, [refreshInventory])
+  }, [navTo, section, refreshInventory])
 
   /** The open page was saved (F3): adopt the returned file content (stripping
    *  frontmatter exactly like the load effect) or re-fetch when the backend
@@ -383,15 +418,16 @@ export default function KbDetail() {
   // its first page, Documents shows no reader.
   const selectSection = useCallback(
     (next: Section) => {
-      setSection(next)
       if (next === 'index') {
-        openPath('index.md')
-      } else if (next !== 'documents') {
+        navTo('index', 'index.md')
+      } else if (next === 'documents') {
+        navTo('documents', null)
+      } else {
         const first = inv?.[next]?.[0]
-        setSelectedPath(first ? `${next}/${first}` : null)
+        navTo(next, first ? `${next}/${first}` : null)
       }
     },
-    [inv, openPath],
+    [inv, navTo],
   )
 
   const docCount = inv?.document_count ?? 0

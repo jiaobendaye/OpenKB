@@ -15,6 +15,13 @@ from openkb.locks import atomic_write_text, flock, funlock
 
 logger = logging.getLogger(__name__)
 
+# Re-exported for callers (notably the test suite + ``openkb.read_only``)
+# so the resolver lives next to the enforcement code, but import sites
+# keep working from the canonical ``openkb.config`` namespace. Keeping it
+# here as a thin shim also preserves test imports like
+# ``from openkb.config import resolve_read_only``.
+from openkb.read_only import resolve_read_only  # noqa: E402,F401
+
 # Default entity-type vocabulary. Overridable globally / per-KB via the optional
 # ``entity_types:`` config key (see ``resolve_entity_types``).
 DEFAULT_ENTITY_TYPES: tuple[str, ...] = (

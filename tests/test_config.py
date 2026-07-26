@@ -744,3 +744,59 @@ def test_delete_kb_tolerates_ghost_registry_entry(_isolated_global, tmp_path):
 
     delete_kb(ghost)  # no dir to rmtree → just unregister, no error
     assert all(n != "ghost" for n, _ in registered_kbs())
+
+
+# --- read_only --------------------------------------------------------------
+# read_only is a per-KB safety toggle (KB-level config.yaml only, NOT a
+# global_scalars member): when true, the CLI's add / remove / recompile
+# commands and the matching HTTP endpoints must refuse to mutate the KB. The
+# resolver accepts YAML booleans and the common string aliases ("true"/"on"/
+# "yes"/"1") so hand-edited configs stay usable; anything else is False with a
+# warning, never a TypeError.
+
+from openkb.config import resolve_read_only  # noqa: E402
+
+
+def test_resolve_read_only_absent_is_false():
+    assert resolve_read_only({}) is False
+
+
+def test_resolve_read_only_explicit_true_bools():
+    assert resolve_read_only({"read_only": True}) is True
+    assert resolve_read_only({"read_only": False}) is False
+
+
+def test_resolve_read_only_string_truthy_aliases():
+    # YAML scalars round-trip as strings via safe_load; accept the common
+    # truthy aliases a hand-editor would type.
+    assert resolve_read_only({"read_only": "true"}) is True
+    assert resolve_read_only({"read_only": "True"}) is True
+    assert resolve_read_only({"read_only": "yes"}) is True
+    assert resolve_read_only({"read_only": "on"}) is True
+    assert resolve_read_only({"read_only": "1"}) is True
+
+
+def test_resolve_read_only_string_falsy_aliases():
+    # "false"/"off"/"0" are explicit-false intent — still False (the default),
+    # but silent (no warning) since they're well-formed.
+    assert resolve_read_only({"read_only": "false"}) is False
+    assert resolve_read_only({"read_only": "off"}) is False
+    assert resolve_read_only({"read_only": "0"}) is False
+    assert resolve_read_only({"read_only": ""}) is False
+
+
+def test_resolve_read_only_invalid_value_warns_and_returns_false(caplog):
+    # A non-boolean, non-recognised scalar must NOT silently flip read_only
+    # on (that would lock the KB behind a typo). Warn loudly and default to
+    # False so the KB stays writable.
+    with caplog.at_level(logging.WARNING, logger="openkb.config"):
+        assert resolve_read_only({"read_only": "maybe"}) is False
+    assert "read_only" in caplog.text
+
+
+def test_resolve_read_only_rejects_int_outside_0_1(caplog):
+    # 2 is a number but not a recognisable boolean; warn + False rather than
+    # silently coercing truthy integers.
+    with caplog.at_level(logging.WARNING, logger="openkb.config"):
+        assert resolve_read_only({"read_only": 2}) is False
+    assert "read_only" in caplog.text

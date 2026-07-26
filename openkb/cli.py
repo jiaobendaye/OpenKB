@@ -63,6 +63,20 @@ from openkb.config import (
     resolve_per_request_overrides,
 )
 from openkb.add_coordinator import _cleanup_staging_dirs
+
+
+def _guard_not_read_only(kb_dir: Path, op: str) -> None:
+    """Translate :class:`ReadOnlyError` into a click-friendly exit.
+
+    Used by ``add`` / ``remove`` / ``recompile`` — all three run BEFORE any
+    KB work, so a guard here means the KB is never touched when the toggle
+    is on. ``ClickException`` exits non-zero with ``message`` on stderr,
+    which the CliRunner surfaces in ``result.output``.
+    """
+    try:
+        enforce_not_read_only(kb_dir, op)
+    except ReadOnlyError as exc:
+        raise click.ClickException(str(exc)) from exc
 from openkb.converter import (
     _registry_path,
     _sanitize_stem,
@@ -77,6 +91,7 @@ from openkb.indexer import (
 from openkb.locks import atomic_write_json, atomic_write_text, kb_ingest_lock, kb_read_lock
 from openkb.log import append_log
 from openkb.mutation import publish_staged_tree
+from openkb.read_only import ReadOnlyError, enforce_not_read_only
 from openkb.schema import AGENTS_MD, INDEX_SEED, PAGE_CONTENT_DIRS
 
 # Suppress warnings after all imports — markitdown overrides filters at import time
@@ -223,6 +238,33 @@ def _setup_llm_key(kb_dir: Path | None = None) -> None:
         for env_var in _KNOWN_PROVIDER_KEYS:
             if not os.environ.get(env_var):
                 os.environ[env_var] = api_key
+
+
+def _echo_llm_config(kb_dir: Path) -> None:
+    """Print the resolved LLM API base, key suffix, and model before execution.
+
+    Ensures ``.env`` files are loaded (via :func:`_setup_llm_key`) so the
+    printed values reflect what the upcoming API calls will actually use.
+    The API key is masked to its last 5 characters for safety.
+    """
+    _setup_llm_key(kb_dir)
+    config = resolve_effective_config(kb_dir)[0]
+    model = config.get("model", DEFAULT_CONFIG["model"])
+    api_key = os.environ.get("LLM_API_KEY", "")
+    if not api_key:
+        provider = _extract_provider(str(model))
+        if provider:
+            api_key = os.environ.get(f"{provider.upper()}_API_KEY", "")
+    api_base = (
+        os.environ.get("OPENAI_API_BASE")
+        or getattr(litellm, "api_base", None)
+        or "(provider default)"
+    )
+    if api_key:
+        key_display = f"...{api_key[-5:]}" if len(api_key) >= 5 else api_key
+    else:
+        key_display = "(unset)"
+    click.echo(f"LLM Config: api_base={api_base}  key={key_display}  model={model}")
 
 
 # Supported document extensions for the `add` command
@@ -1092,6 +1134,10 @@ def add(ctx, path, from_pageindex_cloud):
         click.echo("No knowledge base found. Run `openkb init` first.")
         return
 
+    _guard_not_read_only(kb_dir, "add")
+
+    _echo_llm_config(kb_dir)
+
     # Cloud import path — mutually exclusive with a local/URL PATH.
     if from_pageindex_cloud is not None:
         if path is not None:
@@ -1726,6 +1772,8 @@ def remove(ctx, identifier, keep_raw, keep_empty, dry_run, yes):
         click.echo("No knowledge base found. Run `openkb init` first.")
         return
 
+    _guard_not_read_only(kb_dir, "remove")
+
     openkb_dir = kb_dir / ".openkb"
     registry = HashRegistry(openkb_dir / "hashes.json")
 
@@ -1903,6 +1951,8 @@ def recompile(ctx, doc_name, all_docs, dry_run, yes, refresh_schema):
     if kb_dir is None:
         click.echo("No knowledge base found. Run `openkb init` first.")
         return
+
+    _guard_not_read_only(kb_dir, "recompile")
 
     if all_docs and doc_name:
         click.echo("Specify either a DOC_NAME or --all, not both.")
